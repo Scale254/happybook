@@ -13,9 +13,10 @@ export async function GET(request: Request) {
   const checkIn = searchParams.get("checkIn");
   const checkOut = searchParams.get("checkOut");
   const guests = Number(searchParams.get("guests") || "2");
-  if (!validDate(checkIn) || !validDate(checkOut) || !validStay(checkIn, checkOut) ||
+  const allowBackdated = searchParams.get("allowBackdated") === "true";
+  if (!validDate(checkIn) || !validDate(checkOut) || !validStay(checkIn, checkOut, allowBackdated) ||
     !Number.isInteger(guests) || guests < 1 || guests > 20) {
-    return Response.json({ error: "Choose valid future check-in and check-out dates and a guest count from 1 to 20." }, { status: 400 });
+    return Response.json({ error: "Choose valid check-in and check-out dates and a guest count from 1 to 20." }, { status: 400 });
   }
 
   try {

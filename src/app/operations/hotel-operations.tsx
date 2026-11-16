@@ -340,6 +340,7 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
   const [guests, setGuests] = useState(2);
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
+  const [allowBackdated, setAllowBackdated] = useState(false);
   const [availabilityState, setAvailabilityState] = useState<{
     query: string;
     loading: boolean;
@@ -350,7 +351,7 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
   const payableReservations = reservations.filter((reservation) =>
     !["inquiry", "pending", "cancelled", "no-show"].includes(String(reservation.status)) && Number(reservation.availableToRecordKsh) > 0);
   const selectedPayment = payableReservations.find((reservation) => reservation.reference === selectedPaymentReservation);
-  const availabilityQuery = `${checkIn}|${checkOut}|${guests}`;
+  const availabilityQuery = `${checkIn}|${checkOut}|${guests}|${allowBackdated}`;
   const currentAvailability = availabilityState.query === availabilityQuery ? availabilityState : null;
   const hasStayDates = Boolean(checkIn && checkOut && checkOut > checkIn);
   const availabilityChecking = hasStayDates && (!currentAvailability || currentAvailability.loading);
@@ -393,7 +394,7 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setAvailabilityState({ query: availabilityQuery, loading: true, rooms: {}, error: "" });
-      void fetch(`/api/admin/reservations/availability?checkIn=${encodeURIComponent(checkIn)}&checkOut=${encodeURIComponent(checkOut)}&guests=${guests}`, {
+      void fetch(`/api/admin/reservations/availability?checkIn=${encodeURIComponent(checkIn)}&checkOut=${encodeURIComponent(checkOut)}&guests=${guests}&allowBackdated=${allowBackdated}`, {
         cache: "no-store",
         signal: controller.signal,
       }).then(async (response) => {
@@ -419,7 +420,7 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [availabilityQuery, checkIn, checkOut, guests, isBooking]);
+  }, [availabilityQuery, checkIn, checkOut, guests, allowBackdated, isBooking]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -449,6 +450,7 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
       form.set("roomSlug", selectedRoomSlug);
       if (selectedRoomCode) form.set("roomUnitCode", selectedRoomCode);
       form.set("discountPerNightKsh", String(discountPerNightKsh));
+      form.set("allowBackdated", String(allowBackdated));
       form.set("guests", String(guests));
       form.set("checkIn", checkIn);
       form.set("checkOut", checkOut);
@@ -475,11 +477,12 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
         <section className="reservation-step">
           <h3><span>1</span> Stay and room</h3>
           <div className="reservation-stay-fields">
-            <label>Check in<input name="checkIn" type="date" min={nairobiDate()} value={checkIn} onChange={(event) => { setCheckIn(event.target.value); setSelectedRoomSlug(""); setSelectedRoomCode(""); }} required/></label>
-            <label>Check out<input name="checkOut" type="date" min={checkIn ? nextDate(checkIn) : nairobiDate(1)} value={checkOut} onChange={(event) => { setCheckOut(event.target.value); setSelectedRoomSlug(""); setSelectedRoomCode(""); }} required/></label>
+            <label>Check in<input name="checkIn" type="date" min={allowBackdated ? undefined : nairobiDate()} value={checkIn} onChange={(event) => { setCheckIn(event.target.value); setSelectedRoomSlug(""); setSelectedRoomCode(""); }} required/></label>
+            <label>Check out<input name="checkOut" type="date" min={checkIn ? nextDate(checkIn) : allowBackdated ? undefined : nairobiDate(1)} value={checkOut} onChange={(event) => { setCheckOut(event.target.value); setSelectedRoomSlug(""); setSelectedRoomCode(""); }} required/></label>
             <label>Guests<input name="guests" type="number" min="1" max="20" value={guests} onChange={(event) => { setGuests(Number(event.target.value)); setSelectedRoomSlug(""); setSelectedRoomCode(""); }} required/></label>
             <label>Beds<select value={bedFilter} onChange={(event) => { setBedFilter(event.target.value); setSelectedRoomSlug(""); setSelectedRoomCode(""); }}><option value="any">Any bed count</option>{[...new Set(activeRooms.map((room) => Number(room.bedCount || 0)).filter((count) => count > 0))].sort((a, b) => a - b).map((count) => <option key={count} value={count}>{count} {count === 1 ? "bed" : "beds"}</option>)}</select></label>
           </div>
+          <label className="reservation-backdated-toggle"><input type="checkbox" checked={allowBackdated} onChange={(event) => { setAllowBackdated(event.target.checked); setSelectedRoomSlug(""); setSelectedRoomCode(""); }}/><span>Allow backdated reservation</span></label>
           <label className="reservation-room-search">Find a room by number or name<input type="search" value={roomSearch} onChange={(event) => { setRoomSearch(event.target.value); setSelectedRoomSlug(""); setSelectedRoomCode(""); }} placeholder="Type a room number or name, e.g. A3 or Studio"/></label>
           <div className="reservation-room-suggestions" role="listbox" aria-label="Matching rooms">
             {!activeRooms.length ? <p>No active rooms are configured.</p> : !hasStayDates ? <p>Choose check-in and check-out dates to find available room numbers.</p> : availabilityChecking ? <p>Checking room numbers and availability…</p> : availabilityError ? <p role="alert">{availabilityError}</p> : !reservationChoices.length ? <p>No available rooms match that number or name, guest count, and bed filter.</p> : reservationChoices.map(({ accommodation, option }) => {

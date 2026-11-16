@@ -19,6 +19,7 @@ export async function POST(request: Request) {
   const roomSlug = typeof data.roomSlug === "string" ? data.roomSlug.trim() : "";
   const roomUnitCode = typeof data.roomUnitCode === "string" ? data.roomUnitCode.trim() : "";
   const discountPerNightKsh = data.discountPerNightKsh === undefined ? 0 : Number(data.discountPerNightKsh);
+  const allowBackdated = data.allowBackdated === true || data.allowBackdated === "true";
   const checkIn = data.checkIn;
   const checkOut = data.checkOut;
   const guests = Number(data.guests);
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
     discountPerNightKsh > 100000000 ||
     !validDate(checkIn) ||
     !validDate(checkOut) ||
-    !validStay(checkIn, checkOut) ||
+    !validStay(checkIn, checkOut, allowBackdated) ||
     !Number.isInteger(guests) ||
     guests < 1 ||
     guests > 20 ||
