@@ -45,6 +45,7 @@ type RoomCombinationInput = Omit<RoomCombination, "active" | "units">;
 type BookingInput = {
   roomSlug: string;
   roomUnitCode?: string;
+  discountPerNightKsh?: number;
   checkIn: string;
   checkOut: string;
   guests: number;
@@ -103,6 +104,7 @@ database.exec(`
     guest_phone TEXT,
     nightly_rate_ksh INTEGER NOT NULL,
     total_ksh INTEGER NOT NULL,
+    discount_per_night_ksh INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'confirmed',
     source TEXT NOT NULL DEFAULT 'Website',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -280,6 +282,7 @@ const reservationColumns = database.prepare("PRAGMA table_info(reservations)").a
 if (!reservationColumns.some((column) => column.name === "source")) database.exec("ALTER TABLE reservations ADD COLUMN source TEXT NOT NULL DEFAULT 'Website'");
 if (!reservationColumns.some((column) => column.name === "room_unit_id")) database.exec("ALTER TABLE reservations ADD COLUMN room_unit_id INTEGER REFERENCES room_units(id)");
 if (!reservationColumns.some((column) => column.name === "accommodation_slug")) database.exec("ALTER TABLE reservations ADD COLUMN accommodation_slug TEXT NOT NULL DEFAULT ''");
+if (!reservationColumns.some((column) => column.name === "discount_per_night_ksh")) database.exec("ALTER TABLE reservations ADD COLUMN discount_per_night_ksh INTEGER NOT NULL DEFAULT 0");
 database.exec(`
   UPDATE reservations SET accommodation_slug=room_slug WHERE accommodation_slug='';
   INSERT OR IGNORE INTO reservation_room_units(reservation_id,room_unit_id)
@@ -527,14 +530,17 @@ function priceForStay(unit: { nightlyRateKsh: number; weeklyRatesKsh?: number[] 
   const start = Date.parse(`${checkIn}T00:00:00Z`);
   const end = Date.parse(`${checkOut}T00:00:00Z`);
   const nights = Math.round((end - start) / 86400000);
-  if (!Number.isFinite(start) || nights < 1 || nights > 60) return { nights: 0, totalKsh: 0, nightlyRateKsh: unit.nightlyRateKsh };
+  if (!Number.isFinite(start) || nights < 1 || nights > 60) return { nights: 0, totalKsh: 0, nightlyRateKsh: unit.nightlyRateKsh, minimumNightlyRateKsh: unit.nightlyRateKsh };
   const rates = unit.weeklyRatesKsh?.length === 7 ? unit.weeklyRatesKsh : Array(7).fill(unit.nightlyRateKsh);
   let totalKsh = 0;
+  let minimumNightlyRateKsh = Number.POSITIVE_INFINITY;
   for (let night = 0; night < nights; night += 1) {
     const weekday = (new Date(start + night * 86400000).getUTCDay() + 6) % 7;
-    totalKsh += Number(rates[weekday] || unit.nightlyRateKsh);
+    const nightlyRateKsh = Number(rates[weekday] || unit.nightlyRateKsh);
+    totalKsh += nightlyRateKsh;
+    minimumNightlyRateKsh = Math.min(minimumNightlyRateKsh, nightlyRateKsh);
   }
-  return { nights, totalKsh, nightlyRateKsh: Math.round(totalKsh / nights) };
+  return { nights, totalKsh, nightlyRateKsh: Math.round(totalKsh / nights), minimumNightlyRateKsh };
 }
 
 export function getRoomAvailability(checkIn: string, checkOut: string, guests: number) {
@@ -1003,8 +1009,8 @@ export function getReservationStatusEmail(reference: string) {
 
 const createReservation = database.prepare(`
   INSERT INTO reservations (reference, room_slug, room_unit_id, accommodation_slug, check_in, check_out, guests, guest_name, guest_email,
-    guest_phone, nightly_rate_ksh, total_ksh, source, status)
-  VALUES (@reference, @roomSlug, @roomUnitId, @accommodationSlug, @checkIn, @checkOut, @guests, @name, @email, @phone, @nightlyRateKsh, @totalKsh, @source, @status)
+    guest_phone, nightly_rate_ksh, total_ksh, discount_per_night_ksh, source, status)
+  VALUES (@reference, @roomSlug, @roomUnitId, @accommodationSlug, @checkIn, @checkOut, @guests, @name, @email, @phone, @nightlyRateKsh, @totalKsh, @discountPerNightKsh, @source, @status)
 `);
 const findRoom = database.prepare("SELECT slug, name, inventory, max_guests, nightly_rate_ksh FROM rooms WHERE slug=? AND active=1");
 function reserve(input: BookingInput) {
@@ -1019,6 +1025,10 @@ function reserve(input: BookingInput) {
     ? availability.unitOptions.find((candidate) => candidate.code?.toLowerCase() === input.roomUnitCode?.toLowerCase())
     : availability.unitOptions[0];
   if (!option) throw new BookingError("NO_AVAILABILITY", "That accommodation is no longer available for these dates.");
+  const discountPerNightKsh = input.discountPerNightKsh ?? 0;
+  if (!Number.isSafeInteger(discountPerNightKsh) || discountPerNightKsh < 0 || discountPerNightKsh > option.minimumNightlyRateKsh) {
+    throw new BookingError("INVALID_DISCOUNT", "The nightly discount must be a whole amount no greater than the room's lowest nightly rate.");
+  }
   const unitIds = option.unitIds || (option.id === undefined ? [] : [option.id]);
   if (!unitIds.length) throw new BookingError("NO_AVAILABILITY", "The selected accommodation has no bookable physical rooms.");
   const chosenUnits = unitIds.map((id) => database.prepare("SELECT id,code,room_slug AS roomSlug FROM room_units WHERE id=? AND active=1").get(id) as { id: number; code: string; roomSlug: string } | undefined);
@@ -1026,9 +1036,10 @@ function reserve(input: BookingInput) {
   const activeUnits = chosenUnits as { id: number; code: string; roomSlug: string }[];
   const room = findRoom.get(activeUnits[0].roomSlug) as RoomRow | undefined;
   if (!room) throw new BookingError("NO_AVAILABILITY", "The selected physical room is no longer bookable.");
-  const nightlyRateKsh = option.nightlyRateKsh;
+  const nightlyRateKsh = Math.max(0, option.nightlyRateKsh - discountPerNightKsh);
   const reference = `HLD-${new Date().getUTCFullYear()}-${randomBytes(5).toString("hex").toUpperCase()}`;
-  const totalKsh = option.totalKsh;
+  const totalDiscountKsh = discountPerNightKsh * nights;
+  const totalKsh = option.totalKsh - totalDiscountKsh;
   const accommodationName = availability.name;
   upsertGuestProfile(input);
   createReservation.run({
@@ -1044,6 +1055,7 @@ function reserve(input: BookingInput) {
     phone: input.phone || null,
     nightlyRateKsh,
     totalKsh,
+    discountPerNightKsh,
     source: input.source || "Website",
     status: (input.source || "Website") === "Website" ? "pending" : "confirmed",
   });
@@ -1051,9 +1063,9 @@ function reserve(input: BookingInput) {
   const linkUnit = database.prepare("INSERT INTO reservation_room_units(reservation_id,room_unit_id) VALUES(?,?)");
   for (const unit of activeUnits) linkUnit.run(reservationId, unit.id);
   const initialStatus = (input.source || "Website") === "Website" ? "pending" : "confirmed";
-  recordAudit("reservation.created", "reservation", reference, { accommodation: input.roomSlug, roomName: accommodationName, roomUnits: activeUnits.map((unit) => unit.code), checkIn: input.checkIn, checkOut: input.checkOut, guests: input.guests, nightlyRateKsh, totalKsh, guestName: input.name, guestEmail: input.email, guestPhone: input.phone || "", source: input.source || "Website", status: initialStatus });
+  recordAudit("reservation.created", "reservation", reference, { accommodation: input.roomSlug, roomName: accommodationName, roomUnits: activeUnits.map((unit) => unit.code), checkIn: input.checkIn, checkOut: input.checkOut, guests: input.guests, nightlyRateKsh, discountPerNightKsh, totalDiscountKsh, totalKsh, guestName: input.name, guestEmail: input.email, guestPhone: input.phone || "", source: input.source || "Website", status: initialStatus });
   database.exec("COMMIT");
-  return { reference, roomName: accommodationName, roomCode: activeUnits[0].code, roomCodes: activeUnits.map((unit) => unit.code), nights, nightlyRateKsh, totalKsh, status: initialStatus };
+  return { reference, roomName: accommodationName, roomCode: activeUnits[0].code, roomCodes: activeUnits.map((unit) => unit.code), nights, nightlyRateKsh, discountPerNightKsh, totalDiscountKsh, totalKsh, status: initialStatus };
   } catch (error) { database.exec("ROLLBACK"); throw error; }
 }
 

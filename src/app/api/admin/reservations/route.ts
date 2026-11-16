@@ -18,6 +18,7 @@ export async function POST(request: Request) {
 
   const roomSlug = typeof data.roomSlug === "string" ? data.roomSlug.trim() : "";
   const roomUnitCode = typeof data.roomUnitCode === "string" ? data.roomUnitCode.trim() : "";
+  const discountPerNightKsh = data.discountPerNightKsh === undefined ? 0 : Number(data.discountPerNightKsh);
   const checkIn = data.checkIn;
   const checkOut = data.checkOut;
   const guests = Number(data.guests);
@@ -33,6 +34,9 @@ export async function POST(request: Request) {
   if (
     !/^[a-z0-9-]{2,60}$/.test(roomSlug) ||
     roomUnitCode.length > 100 ||
+    !Number.isSafeInteger(discountPerNightKsh) ||
+    discountPerNightKsh < 0 ||
+    discountPerNightKsh > 100000000 ||
     !validDate(checkIn) ||
     !validDate(checkOut) ||
     !validStay(checkIn, checkOut) ||
@@ -54,7 +58,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const booking = createBooking({ roomSlug, roomUnitCode: roomUnitCode || undefined, checkIn, checkOut, guests, name, email, phone, nationality, idDocument, preferences, notes, source });
+    const booking = createBooking({ roomSlug, roomUnitCode: roomUnitCode || undefined, discountPerNightKsh, checkIn, checkOut, guests, name, email, phone, nationality, idDocument, preferences, notes, source });
     return Response.json({
       reservation: { ...booking, roomSlug, checkIn, checkOut, guests, name, email, phone, source },
     }, { status: 201, headers: { "Cache-Control": "no-store" } });

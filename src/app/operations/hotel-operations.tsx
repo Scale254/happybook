@@ -309,6 +309,7 @@ type AvailableUnitOption = {
   unitCodes?: string[];
   totalKsh: number;
   nightlyRateKsh: number;
+  minimumNightlyRateKsh: number;
   nights: number;
   maxGuests: number;
   bedCount: number;
@@ -335,6 +336,7 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
   const [bedFilter, setBedFilter] = useState("any");
   const [selectedRoomSlug, setSelectedRoomSlug] = useState("");
   const [selectedRoomCode, setSelectedRoomCode] = useState("");
+  const [discountPerNightKsh, setDiscountPerNightKsh] = useState(0);
   const [guests, setGuests] = useState(2);
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
@@ -379,6 +381,11 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
     if (!accommodation.unitOptions.length && matchesSearch()) return [{ accommodation, option: null }];
     return [];
   });
+  const selectedRoomChoice = reservationChoices.find((choice) =>
+    choice.accommodation.slug === selectedRoomSlug &&
+    (choice.option?.code || "") === selectedRoomCode);
+  const maximumDiscountPerNightKsh = selectedRoomChoice?.option?.minimumNightlyRateKsh;
+  const discountExceedsNightlyRate = maximumDiscountPerNightKsh !== undefined && discountPerNightKsh > maximumDiscountPerNightKsh;
 
   useEffect(() => {
     if (!isBooking || !checkIn || !checkOut || checkOut <= checkIn) return;
@@ -435,8 +442,13 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
         setError("Check room availability again before saving this reservation.");
         return;
       }
+      if (discountExceedsNightlyRate) {
+        setError("The nightly discount cannot exceed the room's lowest nightly rate.");
+        return;
+      }
       form.set("roomSlug", selectedRoomSlug);
       if (selectedRoomCode) form.set("roomUnitCode", selectedRoomCode);
+      form.set("discountPerNightKsh", String(discountPerNightKsh));
       form.set("guests", String(guests));
       form.set("checkIn", checkIn);
       form.set("checkOut", checkOut);
@@ -482,7 +494,16 @@ function ActionModal({ type, rooms, roomUnits, reservations, initialReservationR
             })}
           </div>
           {availabilityError && <p className="reservation-availability-error" role="alert">{availabilityError}</p>}
-          <label className="reservation-source">Booking source<select name="source"><option>Direct</option><option>Walk-in</option><option>Phone</option><option>WhatsApp</option><option>Website</option><option>Airbnb</option><option>Booking.com</option><option>Expedia</option><option>Travel Agent</option><option>Corporate</option><option>Other</option></select></label>
+          <div className="reservation-source-row">
+            <label className="reservation-source">Booking source<select name="source"><option>Direct</option><option>Walk-in</option><option>Phone</option><option>WhatsApp</option><option>Website</option><option>Airbnb</option><option>Booking.com</option><option>Expedia</option><option>Travel Agent</option><option>Corporate</option><option>Other</option></select></label>
+            <label className="reservation-discount">Discount per night (KSh)<input name="discountPerNightKsh" type="number" min="0" max={maximumDiscountPerNightKsh ?? 100000000} step="1" value={discountPerNightKsh} onChange={(event) => setDiscountPerNightKsh(Number(event.target.value || 0))}/></label>
+          </div>
+          {selectedRoomChoice?.option && <div className="reservation-price-summary" role="status">
+            <span>Room total <b>{formatKsh(selectedRoomChoice.option.totalKsh)}</b></span>
+            <span>Discount <b>−{formatKsh(discountPerNightKsh * selectedRoomChoice.option.nights)}</b> ({formatKsh(discountPerNightKsh)} × {selectedRoomChoice.option.nights} {selectedRoomChoice.option.nights === 1 ? "night" : "nights"})</span>
+            <span>Stay total <b>{formatKsh(selectedRoomChoice.option.totalKsh - discountPerNightKsh * selectedRoomChoice.option.nights)}</b></span>
+            {discountExceedsNightlyRate && <small>The discount cannot exceed the lowest nightly room rate of {formatKsh(maximumDiscountPerNightKsh || 0)}.</small>}
+          </div>}
         </section>
         <section className="reservation-step">
           <h3><span>2</span> Guest details</h3>
